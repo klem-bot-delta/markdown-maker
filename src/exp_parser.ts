@@ -13,21 +13,23 @@ type MDDef = Map<
 	string,
 	{
 		value: string;
-		pos: number;
+		string: string;
 	}
 >;
 
 type MDRef = Map<
 	string,
 	{
-		pos: number;
+		string: string;
 	}
 >;
 
-type Token = MDDef | MDRef;
+export type Token = MDDef | MDRef;
 
-const parser = (text: string) => {
-	let doc: Map<string, Map<string, Token>> = new Map();
+export type AST = Map<string, Map<string, Token>>;
+
+const parser = (text: string): AST => {
+	let doc: AST = new Map();
 
 	let str = text;
 
@@ -42,7 +44,7 @@ const parser = (text: string) => {
 			for (let x of groups) {
 				entry.set(x[1], {
 					value: x[2],
-					pos: x['index'],
+					string: x[0],
 				});
 			}
 
@@ -50,7 +52,7 @@ const parser = (text: string) => {
 		} else {
 			for (let x of groups) {
 				entry.set(x[1], {
-					pos: x['index'],
+					string: x[0],
 				});
 			}
 
@@ -60,3 +62,5 @@ const parser = (text: string) => {
 
 	return doc;
 };
+
+export default parser;
