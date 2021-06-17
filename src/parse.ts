@@ -2,6 +2,7 @@ const fs = require("fs"); /* for handling reading of files */
 const path = require("path"); /* for handling file paths */
 
 import Colors = require("colors.ts"); /* for adding colours to strings */
+import { refreshServer, wsServer } from "./socket";
 Colors.enable();
 const { ArgumentParser } = require("argparse"); /* for parsing clargs */
 const { version } = require("../package.json"); /* package version number */
@@ -9,7 +10,6 @@ const marked = require("marked");
 const choki = require("chokidar");
 
 const commands = require("./commands.js");
-const { title } = require("process");
 
 const argParser = new ArgumentParser({
     description: "Markdown bundler, with extra options",
@@ -96,6 +96,7 @@ class Parser {
         allow_undef: boolean;
         html: boolean;
         targetType: TargetType | undefined;
+        watch: boolean;
     };
     raw: string;
 
@@ -131,6 +132,7 @@ class Parser {
             allow_undef: false,
             html: false,
             targetType: undefined,
+            watch: false,
         };
 
         /* load data from file, if it exists,
@@ -358,7 +360,12 @@ class Parser {
 
         if (this.opts.html) {
             const htmlFileName = bundle.replace(".md", ".html");
-            fs.writeFile(htmlFileName, this.html(), () => {
+
+            const watchScript = `<script>var s = new WebSocket("ws://localhost:8899");s.onmessage = (m) => {m.data.text().then((n) => {try {var c = JSON.parse(n);if (c.type === "refresh")window.location.reload();} catch (e) {console.log("Invalid JSON recieved:", e);}});};</script>`;
+            let htmlDoc = this.html();
+            if (this.opts.watch) htmlDoc = watchScript + htmlDoc;
+
+            fs.writeFile(htmlFileName, htmlDoc, () => {
                 if (!called) cb(htmlFileName);
                 called = true;
             });
@@ -410,35 +417,41 @@ class Parser {
 module.exports = Parser;
 
 function main() {
+    var server: refreshServer | undefined;
     const clargs = argParser.parse_args();
 
     /* helper method for calling parser */
-    const compile = (s, o) => {
+    const compile = (s, o, cb?) => {
         const parser = new Parser(s, clargs);
         parser.to(o, (f) => {
             console.log(`Compiled ${f}`.green);
+            if (cb) cb();
         });
         return parser;
     };
 
     const internalCooldown = 1000;
-    const watcher = (event, path) => {
+    function watcher(event, path) {
         const now = Date.now();
 
         if (!this.time) this.time = now;
 
         if (now - this.time < internalCooldown) return;
 
+        console.log(path);
+
         console.log(`Detected change in ${path}...`);
 
         try {
-            compile(clargs.src, clargs.output);
+            compile(clargs.src, clargs.output, () => {
+                if (server.refresh) server.refresh();
+            });
         } catch (e) {
             console.log(e.message);
         }
 
         this.time = now;
-    };
+    }
 
     if (clargs.debug) {
         console.dir(clargs);
@@ -450,10 +463,11 @@ function main() {
 
     const srcDirName = path.dirname(clargs.src);
 
-    compile(clargs.src, clargs.output);
+    if (!clargs.watch) compile(clargs.src, clargs.output);
 
     if (clargs.watch) {
         /* watch the folder of entry */
+        server = wsServer();
         console.log(`Watching ${srcDirName} for changes...`.yellow);
 
         const _watcher = choki.watch(srcDirName).on("all", watcher);

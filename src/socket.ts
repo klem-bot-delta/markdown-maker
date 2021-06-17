@@ -1,10 +1,6 @@
 import net from "net";
 import { createHash } from "crypto";
 
-const server = net.createServer();
-const WSID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
-const port = 8888;
-
 function setBitInBuffer(bufferView, index, value) {
     let bufIndex = Math.floor(index / 8);
     let byteIndex = 7 - (index % 8);
@@ -50,7 +46,6 @@ function encodeWebSocketBuffer(msg: string) {
     if (msg.length > 125) msg = "Error: Unimplemented message length";
 
     let payloadLength = msg.length;
-    console.log(`sending: ${msg}: ${payloadLength}`);
     let payload = new Uint8Array(payloadLength);
     let blob = new Uint8Array(payloadLength + 2 + 4);
 
@@ -77,13 +72,7 @@ function encodeWebSocketBuffer(msg: string) {
 
     // insert package
     for (let i = 2; i < 2 + msg.length; i++) {
-        console.log(
-            `char: ${msg[i - 2]}; charCode: ${msg.charCodeAt(i - 2)}; i: ${
-                i - 2
-            }`
-        );
-
-        blob[i] |= msg.charCodeAt(i - 2) /*  ^ mask[i % 4] */;
+        blob[i] |= msg.charCodeAt(i - 2);
     }
 
     return blob;
@@ -116,43 +105,53 @@ function decodeWebSocketBuffer(buffer: ArrayBuffer) {
     return decoded;
 }
 
-server.on("connection", (sock) => {
-    console.log("connection!");
+function refresh(sock) {
+    let command = JSON.stringify({ type: "refresh" });
+    let message = encodeWebSocketBuffer(command);
+    sock.write(message);
+}
 
-    sock.on("data", (buffer) => {
-        var data = buffer.toString();
+export interface refreshServer {
+    refresh: () => void;
+    write: (msg) => void;
+}
 
-        const key = data.match(/Sec-WebSocket-Key: (.+)/);
+export function wsServer(): refreshServer {
+    const server = <any>net.createServer();
+    const WSID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    const port = 8899;
 
-        if (key) {
-            console.log(`data: [\n${buffer}]`);
-            const digest = createHash("sha1")
-                .update(key[1] + WSID)
-                .digest("base64");
+    server.on("connection", (sock) => {
+        server.refresh = () => refresh(sock);
 
-            const headers = [
-                `HTTP/1.1 101 Switching Protocols`,
-                `Upgrade: websocket`,
-                `Connection: Upgrade`,
-                `Sec-WebSocket-Accept: ${digest}`,
-            ];
-            sock.write(headers.concat("\r\n").join("\r\n"));
-            console.log("sent upgrade response");
-        } else {
-            console.log(buffer);
-            const message = decodeWebSocketBuffer(buffer);
-            const echo = encodeWebSocketBuffer(`Echo: ${message}`);
-            console.log(message, "\n", echo);
+        sock.on("data", (buffer) => {
+            var data = buffer.toString();
 
-            sock.write(echo);
-        }
+            const key = data.match(/Sec-WebSocket-Key: (.+)/);
+
+            if (key) {
+                const digest = createHash("sha1")
+                    .update(key[1] + WSID)
+                    .digest("base64");
+
+                const headers = [
+                    `HTTP/1.1 101 Switching Protocols`,
+                    `Upgrade: websocket`,
+                    `Connection: Upgrade`,
+                    `Sec-WebSocket-Accept: ${digest}`,
+                ];
+                sock.write(headers.concat("\r\n").join("\r\n"));
+            }
+        });
+
+        sock.on("error", (e) => {
+            console.log(`err: ${e.toString()}`);
+        });
     });
 
-    sock.on("error", (e) => {
-        console.log(`err: ${e.toString()}`);
+    server.listen(port, () => {
+        console.log(`listening on port ${port}`);
     });
-});
 
-server.listen(port, () => {
-    console.log(`listening on port ${port}`);
-});
+    return server;
+}
