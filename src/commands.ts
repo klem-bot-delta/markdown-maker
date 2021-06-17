@@ -107,10 +107,6 @@ new Command(
         const name = t.match(/^#mdinclude<([\w.\/-]+)>/)[1];
         const recursiveParser = new Parser(path.join(p.wd, name), p.opts, p);
 
-        /* keep the options the same */
-        recursiveParser.opts = p.opts;
-        recursiveParser.parent = p;
-
         const _fileNameArr = recursiveParser.file.split(".");
         const fileType = _fileNameArr[_fileNameArr.length - 1];
 
@@ -147,29 +143,28 @@ new Command(
 new Command(
     CommandType.PARSE,
     (t, p) => t.match(/#mdref<([\w\W]+)>/),
-    
+
     (t, p) => {
         const match = t.match(/#mdref<([\w\W]+)>/);
-        
+
         for (let i = 0; i < p.opts.secs.length; i++) {
-            
-            let {title} = p.opts.secs[i];
-            if (title === match[1]) 
-            break;
-            
-            if (i === p.opts.secs.length - 1) 
-            throw new Error(`Reference to [${match[1]}] could not be resolved!`)
+            let { title } = p.opts.secs[i];
+            if (title === match[1]) break;
+
+            if (i === p.opts.secs.length - 1)
+                throw new Error(
+                    `Reference to [${match[1]}] could not be resolved!`
+                );
         }
-        
+
         match[1] = match[1].replace("_", " ");
         const link = p.titleId(match[1]);
         if (p.opts.targetType === TargetType.HTML)
             return `<a href="#${link}">${match[1]}</a>`;
         else if (p.opts.targetType === TargetType.MARKDOWN)
-            return `[${match[1]}](#${link})`
-        
+            return `[${match[1]}](#${link})`;
     }
-)
+);
 
 new Command(
     CommandType.POSTPARSE,

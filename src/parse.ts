@@ -162,8 +162,8 @@ class Parser {
         }
 
         /* reset sections for beginning parse */
-        if (this.opts.depth === 0) this.opts.secs = [];
-        let __blob;
+        if (!this.parent) this.opts.secs = [];
+        let __blob: string;
 
         /* apply preproccessing to raw file */
         __blob = this.preprocess(this.raw);
@@ -171,8 +171,7 @@ class Parser {
         /* main parser instance call */
         __blob = this.mainparse(__blob);
 
-        /**
-         * apply postprocessing after */
+        /*apply postprocessing after */
         __blob = this.postprocess(__blob);
 
         return __blob;
@@ -326,7 +325,9 @@ class Parser {
             const title = sec.title.replace(/_/g, " ");
 
             let __line =
-                hor.repeat(Math.max(sec.level - 1, 0)) + beg + `[${title}](#${link})`;
+                hor.repeat(Math.max(sec.level - 1, 0)) +
+                beg +
+                `[${title}](#${link})`;
             __blob.push(__line);
         });
         return __blob.join("\n");
@@ -420,12 +421,13 @@ function main() {
         return parser;
     };
 
-    function watcher(event, path) {
+    const internalCooldown = 1000;
+    const watcher = (event, path) => {
         const now = Date.now();
 
         if (!this.time) this.time = now;
 
-        if (now - this.time < 1000) return;
+        if (now - this.time < internalCooldown) return;
 
         console.log(`Detected change in ${path}...`);
 
@@ -436,7 +438,7 @@ function main() {
         }
 
         this.time = now;
-    }
+    };
 
     if (clargs.debug) {
         console.dir(clargs);
@@ -447,12 +449,10 @@ function main() {
     }
 
     const srcDirName = path.dirname(clargs.src);
-    if (!clargs.watch) {
-        console.log(srcDirName);
-        compile(clargs.src, clargs.output);
-    } else {
-        // const internalCooldown = 1000;
 
+    compile(clargs.src, clargs.output);
+
+    if (clargs.watch) {
         /* watch the folder of entry */
         console.log(`Watching ${srcDirName} for changes...`.yellow);
 
