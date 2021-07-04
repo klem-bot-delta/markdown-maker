@@ -13,11 +13,26 @@ function setBitInBuffer(bufferView, index, value) {
     bufferView[bufIndex] = bufferViewByte;
 }
 
+function readBitInNum(number: number, index: number) {
+    if (index > Math.log2(number)) return 0;
+
+    return (number & (1 << index)) >> index;
+}
+
 // TODO: implement as opimization
 // should set all bits in remaining part of byte at bitindex,
 // and all bytes after, until width has been reached
-function setNumberInBuffer(bufferView, index, value, width) {}
-
+function setNumberInBuffer(
+    bufferView: Uint8Array,
+    start: number,
+    value: number,
+    width: number
+) {
+    for (let i = 0; i < width; i++) {
+        let bit = readBitInNum(value, width - (i + 1));
+        setBitInBuffer(bufferView, start + i, bit);
+    }
+}
 function readBitInBuffer(bufferView, index) {
     let bufIndex = Math.floor(index / 8);
     let byteIndex = 7 - (index % 8);
@@ -43,36 +58,42 @@ function readDecimal(bufferView: Uint8Array, start: number, end: number) {
 }
 
 function encodeWebSocketBuffer(msg: string) {
-    if (msg.length > 125) msg = "Error: Unimplemented message length";
-
     let payloadLength = msg.length;
-    let payload = new Uint8Array(payloadLength);
-    let blob = new Uint8Array(payloadLength + 2 + 4);
 
-    // Generate a random bitmask for message
-    let mask = new Uint8Array(4);
-    for (let i = 0; i < 4; i++) {
-        mask[i] = Math.floor(Math.random() * (1 << 8));
+    if (payloadLength > 2 ** 64) throw new Error("Message too long!");
+    /** The length of the extended payload length, if applicable
+     *
+     * if len < 126 : 0
+     * 	  len = 126 : 16
+     *    len > 126 : 64
+     *
+     * https://datatracker.ietf.org/doc/html/rfc6455#section-5.2 */
+    let extendedPayloadLength =
+        payloadLength < 126 ? 0 : payloadLength > 1 << 16 ? 64 : 16;
+
+    let blob = new Uint8Array(payloadLength + 2 + extendedPayloadLength);
+
+    /* write FIN, RSV1, RSV2, RSV3 and opcode in blob*/
+    setNumberInBuffer(blob, 0, 0b1000, 4);
+    setNumberInBuffer(blob, 4, 0x1, 4); // 0x1 opcode text frame
+    /* unmasked for sending */
+
+    /* insert length */
+    if (extendedPayloadLength === 0) {
+        setNumberInBuffer(blob, 9, payloadLength, 7);
+    } else if (extendedPayloadLength === 16) {
+        setNumberInBuffer(blob, 9, 126, 7);
+        setNumberInBuffer(blob, 16, payloadLength, 16);
+    } else {
+        /* extendedPayloadLength === 64 */
+        setNumberInBuffer(blob, 9, 127, 7);
+        setNumberInBuffer(blob, 16, payloadLength, 64);
     }
 
-    // Insert bits into payload
-    setBitInBuffer(blob, 0, 1); // FIN flag
-
-    setBitInBuffer(blob, 6, 1); // opcode (0x1)
-
-    // set MASK flag and payload length
-    blob[1] = 0;
-    blob[1] |= payloadLength;
-
-    // insert MASK key
-    /* 
-    for (let i = 16; i < 48; i++) {
-        setBitInBuffer(blob, i, readBitInBuffer(mask, i - 16));
-    } */
-
-    // insert package
-    for (let i = 2; i < 2 + msg.length; i++) {
-        blob[i] |= msg.charCodeAt(i - 2);
+    /* insert payload */
+    let payloadStartByte = 2 + extendedPayloadLength / 8;
+    for (let i = 0; i < payloadLength; i++) {
+        blob[i + payloadStartByte] = msg.charCodeAt(i);
     }
 
     return blob;
@@ -81,25 +102,53 @@ function encodeWebSocketBuffer(msg: string) {
 function decodeWebSocketBuffer(buffer: ArrayBuffer) {
     const view = new Uint8Array(buffer);
 
-    let payloadLength = readDecimal(view, 9, 15);
+    let fin = readBitInBuffer(view, 0);
+    let RSV = [
+        readBitInBuffer(view, 1),
+        readBitInBuffer(view, 2),
+        readBitInBuffer(view, 3),
+    ];
+    let opcode = "0x" + readDecimal(view, 4, 7).toString(16);
 
+    let payloadLength = readDecimal(view, 9, 15);
+    let initPayloadLength = payloadLength;
     let payloadByteEnd = 2;
+
+    if (payloadLength === 126) {
+        payloadLength = readDecimal(view, 16, 31);
+        payloadByteEnd = 4;
+    } else if (payloadLength === 127) {
+        payloadLength = readDecimal(view, 16, 79);
+        payloadByteEnd = 10;
+    }
 
     let payloadBitEnd = payloadByteEnd * 8;
 
-    let mask = new Uint8Array(4);
-    mask[0] = readDecimal(view, payloadBitEnd, payloadBitEnd + 7);
-    mask[1] = readDecimal(view, payloadBitEnd + 8, payloadBitEnd + 15);
-    mask[2] = readDecimal(view, payloadBitEnd + 16, payloadBitEnd + 23);
-    mask[3] = readDecimal(view, payloadBitEnd + 24, payloadBitEnd + 31);
+    let masked = readBitInBuffer(view, 8);
+    let mask: Uint8Array | undefined;
 
     let decoded = "";
-    let encoded = view.slice(payloadByteEnd + mask.length);
+    if (masked) {
+        mask = new Uint8Array(4);
+        mask[0] = readDecimal(view, payloadBitEnd, payloadBitEnd + 7);
+        mask[1] = readDecimal(view, payloadBitEnd + 8, payloadBitEnd + 15);
+        mask[2] = readDecimal(view, payloadBitEnd + 16, payloadBitEnd + 23);
+        mask[3] = readDecimal(view, payloadBitEnd + 24, payloadBitEnd + 31);
+        let encoded = view.slice(payloadByteEnd + mask.length);
 
-    for (let i = 0; i < encoded.length; i++) {
-        let charCode = encoded[i] ^ mask[i % 4];
-        let char = String.fromCharCode(charCode);
-        decoded += char;
+        for (let i = 0; i < encoded.length; i++) {
+            let charCode = encoded[i] ^ mask[i % 4];
+            let char = String.fromCharCode(charCode);
+            decoded += char;
+        }
+    } else {
+        let encoded = view.slice(payloadByteEnd);
+
+        for (let i = 0; i < encoded.length; i++) {
+            let charCode = encoded[i];
+            let char = String.fromCharCode(charCode);
+            decoded += char;
+        }
     }
 
     return decoded;
@@ -122,7 +171,7 @@ export function wsServer(): refreshServer {
     const port = 8899;
 
     server.on("connection", (sock) => {
-        server.refresh = () => refresh(sock);
+        console.log("connection!");
 
         sock.on("data", (buffer) => {
             var data = buffer.toString();
@@ -130,6 +179,7 @@ export function wsServer(): refreshServer {
             const key = data.match(/Sec-WebSocket-Key: (.+)/);
 
             if (key) {
+                console.log(`data: [\n${buffer}]`);
                 const digest = createHash("sha1")
                     .update(key[1] + WSID)
                     .digest("base64");
@@ -141,6 +191,12 @@ export function wsServer(): refreshServer {
                     `Sec-WebSocket-Accept: ${digest}`,
                 ];
                 sock.write(headers.concat("\r\n").join("\r\n"));
+                console.log("sent upgrade response");
+            } else {
+                const message = decodeWebSocketBuffer(buffer);
+                const echo = encodeWebSocketBuffer(`Echo: ${message}`);
+
+                sock.write(echo);
             }
         });
 
@@ -154,4 +210,8 @@ export function wsServer(): refreshServer {
     });
 
     return server;
+}
+
+if (require.main === module) {
+    const server = wsServer();
 }
