@@ -1,7 +1,6 @@
 # Logs
 logs
 *.log
-npm-debug.log*
 
 # Dependency directories
 node_modules/
@@ -14,8 +13,6 @@ node_modules/
 dist/
 bin/
 tmp/
-test/test-files
-build/
-
-# actual document
-# synced via dropbox rather
+tests/test-files
+bundle/
+coverage/
